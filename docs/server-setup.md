@@ -89,3 +89,48 @@ WSL 1 получает эти записи при генерации hosts. FQDN
 ### Проверки аудита
 На правильной конфигурации: 6 PASS, 0 FAIL, exit 0.
 При временном MaxAuthTries 10: 5 PASS, 1 FAIL, exit 1. После проверки восстановлено 3.
+
+### Очистка оставшихся настроек установщика
+После восстановления исходного снимка закомментировать строку `deb ... file:///cdrom` в `/etc/apt/sources.list`.
+Сохранить `/usr/sbin/policy-rc.d` под именем `policy-rc.d.installer-backup`: этот временный файл установщика возвращает 101 и запрещает автоматический запуск устанавливаемых служб. Затем устанавливать Nginx.
+
+## 8. Веб-сервер
+Пакет nginx 1.24.0-2ubuntu7.19 из репозитория Ubuntu, служба nginx enabled/active.
+Конфигурация `/etc/nginx/sites-available/devops-site`, ссылка в sites-enabled.
+Стандартная ссылка sites-enabled/default удалена, исходный файл сохранён.
+Каталог `/var/www/devops-site` принадлежит devops:devops, права 755; файлы 644.
+Главная страница и собственная 404 находятся в `site/` репозитория, сервер получает их через rsync.
+HTTP 80 перенаправляется кодом 301 на HTTPS 443; разрешены TLSv1.2/TLSv1.3.
+При проверке согласован TLSv1.3, TLS_AES_256_GCM_SHA384.
+Сертификат `/etc/ssl/certs/devops.crt`, root:root 644; закрытый ключ
+`/etc/ssl/private/devops.key`, root:root 600. Ключ за пределы сервера не копировался.
+Создание (срок 365 дней, SAN DNS:devops.local):
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key -out /etc/ssl/certs/devops.crt \
+  -subj '/CN=devops.local' -addext 'subjectAltName=DNS:devops.local'
+sudo chmod 600 /etc/ssl/private/devops.key
+sudo chmod 644 /etc/ssl/certs/devops.crt
+```
+Публичный сертификат получен с сервера доверенным каналом SSH/SCP, в WSL: `/root/devops.crt`.
+Проверка: `curl --cacert ~/devops.crt -I https://devops.local` — 200 без -k.
+subject и issuer сертификата совпадают. Имя проверяется по SAN.
+Журналы HTTPS-ресурса: `/var/log/nginx/devops-site.access.log` и `devops-site.error.log`.
+HTTP-блок перенаправления использует общий журнал Nginx.
+Доставка: `scripts/deploy.sh`, один SSH-сеанс rsync, `--delete --chmod=D755,F644`,
+BatchMode=yes и ConnectTimeout=5. `--dry-run` не изменяет сервер.
+Незакоммиченные изменения и отсутствие index.html прерывают доставку с exit 1;
+после доставки HTTPS проверяется с сертификатом; при недоступности exit 1, при успехе
+печатается короткий хеш коммита и exit 0. Пять сценариев проверены.
+Аудит проверяет nginx active, nginx -t, запас сертификата не менее 30 дней,
+отсутствие world-writable файлов и ключ 600. Для отрицательного теста срока:
+`CERT_MIN_SECONDS=63072000 scripts/audit.sh`; для отрицательного теста прав — временно 666 на index.html.
+В обоих случаях exit 1; в норме 10 PASS, exit 0. После опытов права 644 восстановлены.
+Снимок `04-nginx-https` создан после HTTPS до доставки финального содержимого.
+Проверка восстановления после реального отката на 01-clean-install завершилась аудитом 0;
+автоматизированное выполнение восстановительных команд заняло 14.86 секунды.
+Для воспроизведения веб-настройки после восстановления разделов 1–7:
+установить nginx/rsync, создать каталог с владельцем devops, применить
+`config/nginx/devops-site.conf`, сгенерировать сертификат приведённой командой,
+создать символическую ссылку, проверить `sudo nginx -t && sudo systemctl reload nginx`,
+скопировать публичный сертификат и запустить деплой из чистого Git-дерева.
