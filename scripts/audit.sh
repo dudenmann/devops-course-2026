@@ -43,5 +43,13 @@ if [[ -d /var/www/devops-site ]] && bad=$(find /var/www/devops-site -perm -o+w -
     site_ok=yes
 fi
 check 'No world-writable site files; private key mode 600' yes "$site_ok"
+echo '[5] Containerization'
+check 'Docker service active' active "$(systemctl is-active docker)"
+check 'Database container healthy' healthy "$(docker inspect -f '{{if .State.Running}}{{.State.Health.Status}}{{else}}stopped{{end}}' app-db-1 2>/dev/null)"
+ports_ok=no
+if ss -H -ltn | awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127[.]0[.]0[.]1:/ {bad=1} END {exit bad}'; then ports_ok=yes; fi
+check 'App and database ports are loopback-only' yes "$ports_ok"
+APP_DIR="${APP_DIR:-/home/devops/app}"
+check 'Application env mode 600' 600 "$(stat -c '%a' "$APP_DIR/.env" 2>/dev/null)"
 printf 'Passed: %s; failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

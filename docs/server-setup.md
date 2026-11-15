@@ -134,3 +134,51 @@ BatchMode=yes и ConnectTimeout=5. `--dry-run` не изменяет серве�
 `config/nginx/devops-site.conf`, сгенерировать сертификат приведённой командой,
 создать символическую ссылку, проверить `sudo nginx -t && sudo systemctl reload nginx`,
 скопировать публичный сертификат и запустить деплой из чистого Git-дерева.
+
+## 9. Контейнеризация
+
+Docker Engine 29.9.3 и Compose 5.7.1 установлены из официального apt-репозитория
+https://download.docker.com/linux/ubuntu (ключ /etc/apt/keyrings/docker.asc,
+источник /etc/apt/sources.list.d/docker.sources). Установлены docker-ce,
+docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin.
+Служба docker включена в автозапуск. Пользователь devops состоит в группе docker;
+эта группа фактически даёт полномочия root и предоставлена только администратору.
+
+Проект: /home/devops/app; исходники: app/ в этом репозитории.
+Доставка из WSL: rsync -avz --delete --exclude=.env --exclude=.git
+--chmod=D755,F644 app/ devops:app/ (сначала добавить --dry-run).
+На сервере создать .env под umask 077 с POSTGRES_DB=app,
+POSTGRES_USER=app и POSTGRES_PASSWORD, полученным командой openssl rand -hex 16.
+Не выводить пароль в отчёт. Владелец .env devops, права 600.
+.env исключён из Git и контекста сборки; .env.example содержит заглушку.
+Запуск: cd ~/app && docker compose up -d --build --wait.
+
+Образ devops-app:1.0 основан на python:3.12-slim. requirements.txt копируется
+до app.py, поэтому изменение кода сохраняет кэш установки зависимостей.
+Gunicorn слушает 0.0.0.0:5000 внутри контейнера, работает как app (uid 999),
+CMD в exec-форме. Flask 3.0.3, psycopg2-binary 2.9.9, gunicorn 22.0.0.
+Compose использует postgres:16-alpine, backend и том app_db_data в каталоге данных PostgreSQL.
+DNS сети разрешает имя db; localhost приложения относится к самому контейнеру.
+Проверка pg_isready и depends_on service_healthy предотвращают преждевременный старт.
+Оба сервиса имеют restart: unless-stopped.
+
+Публикуется только 127.0.0.1:5000:5000; порт 5432 не опубликован.
+Обычный down сохраняет том (счётчик 2 -> 3 после up), down -v удаляет его
+(4 -> 1 после up; проверено только на одноразовых учебных данных).
+Не применять -v к данным, которые надо сохранить.
+
+В существующем devops-site добавлен location /app/ с proxy_pass
+http://127.0.0.1:5000/ и заголовками Host, X-Real-IP, X-Forwarded-For,
+X-Forwarded-Proto. Конфигурация хранится в config/nginx/devops-site.conf.
+Применение: sudo nginx -t && sudo systemctl reload nginx.
+HTTPS /app/ возвращает персональное приветствие и растущий счётчик;
+статический / сохраняется. Остановка app даёт 502 и connect() failed (111)
+в журнале Nginx, поскольку upstream не принимает соединение; запуск app устраняет отказ.
+
+Раздел [5] audit.sh проверяет docker active, app-db-1 healthy,
+отсутствие внешних слушателей 5000/5432 и права .env 600.
+Итог: 14 PASS, exit 0. Временная публикация 5000:5000 обнаружена:
+13 PASS/1 FAIL, exit 1; адрес 127.0.0.1 восстановлен.
+Порт Docker на всех интерфейсах обходит обычные правила INPUT UFW через DNAT/FORWARD;
+проверено временным контейнером exposed:5001, затем контейнер удалён.
+Снимок 05-docker-compose создан при выключенной ВМ.
