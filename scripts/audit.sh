@@ -30,5 +30,18 @@ check 'UFW active' active "$(awk '/^Status:/ {print $2}' <<< "$firewall")"
 check 'Incoming denied by default' deny "$(sed -n 's/^Default: \([^ ]*\) (incoming).*/\1/p' <<< "$firewall")"
 echo '[3] Accounts'
 awk -F: '$3>=1000 && $3<65534 {printf "  %s (uid=%s)\n",$1,$3}' /etc/passwd
+echo '[4] Web server'
+check 'Nginx service active' active "$(systemctl is-active nginx)"
+syntax_ok=no
+if sudo nginx -t >/dev/null 2>&1; then syntax_ok=yes; fi
+check 'Nginx configuration syntax' yes "$syntax_ok"
+certificate_ok=no
+if openssl x509 -in /etc/ssl/certs/devops.crt -noout -checkend "${CERT_MIN_SECONDS:-2592000}" >/dev/null 2>&1; then certificate_ok=yes; fi
+check 'Certificate valid for required remaining period' yes "$certificate_ok"
+site_ok=no
+if [[ -d /var/www/devops-site ]] && bad=$(find /var/www/devops-site -perm -o+w -print -quit) && [[ -z "$bad" ]] && [[ "$(sudo stat -c '%a' /etc/ssl/private/devops.key 2>/dev/null)" == 600 ]]; then
+    site_ok=yes
+fi
+check 'No world-writable site files; private key mode 600' yes "$site_ok"
 printf 'Passed: %s; failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
