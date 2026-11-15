@@ -51,5 +51,16 @@ if ss -H -ltn | awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127[.]0[.]0[.]1:/ {bad=1} E
 check 'App and database ports are loopback-only' yes "$ports_ok"
 APP_DIR="${APP_DIR:-/home/devops/app}"
 check 'Application env mode 600' 600 "$(stat -c '%a' "$APP_DIR/.env" 2>/dev/null)"
+echo '[6] KR2'
+kr_redis_id=$(docker compose --project-directory /home/devops/kr2 ps -q redis 2>/dev/null)
+check 'Redis container healthy' healthy "$(docker inspect -f '{{if .State.Running}}{{.State.Health.Status}}{{else}}stopped{{end}}' "$kr_redis_id" 2>/dev/null)"
+check 'KR2 port published only on loopback' '127.0.0.1:8004' "$(docker compose --project-directory /home/devops/kr2 port app 8004 2>/dev/null)"
+check 'KR2 env mode 600' 600 "$(stat -c '%a' /home/devops/kr2/.env 2>/dev/null)"
+kr_cert_ok=no
+if openssl x509 -in /etc/ssl/certs/kr2.crt -noout -checkend 2592000 >/dev/null 2>&1; then kr_cert_ok=yes; fi
+check 'KR2 certificate valid at least 30 days' yes "$kr_cert_ok"
+kr_enabled=no
+if [[ -L /etc/nginx/sites-enabled/kr2 ]] && [[ -f /etc/nginx/sites-enabled/kr2 ]]; then kr_enabled=yes; fi
+check 'KR2 site enabled' yes "$kr_enabled"
 printf 'Passed: %s; failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
